@@ -29,7 +29,7 @@ The server is configured via environment variables.
 | Variable | Description | Example |
 | :--- | :--- | :--- |
 | `JIRA_URL` | Base URL of your Jira instance | `https://rdpm.vestel.com.tr/` |
-| `JIRA_USERNAME` | Username (required for `basic` authentication) | `erayh` |
+| `JIRA_USERNAME` | Username (required for `basic` authentication) | `your_username` |
 | `JIRA_PASSWORD` | Personal Access Token (PAT) or password | `your_pat_or_password` |
 | `JIRA_AUTH_TYPE` | Authentication mechanism: `bearer` or `basic` (default) | `bearer` |
 | `JIRA_REJECT_UNAUTHORIZED` | Toggle SSL certificate verification | `true` |
@@ -46,11 +46,11 @@ Configure your MCP host (such as Claude Desktop or Gemini Code Assist) to launch
 {
   "mcpServers": {
     "vestel-jira": {
-      "command": "node",
-      "args": ["/absolute/path/to/vestel-jira-mcp/index.js"],
+      "command": "npx",
+      "args": ["-y", "github:thehavays/vestel-mcp-server"],
       "env": {
         "JIRA_URL": "https://rdpm.vestel.com.tr/",
-        "JIRA_USERNAME": "erayh",
+        "JIRA_USERNAME": "your_username",
         "JIRA_PASSWORD": "your_secure_password_or_token",
         "JIRA_AUTH_TYPE": "bearer",
         "JIRA_REJECT_UNAUTHORIZED": "true"
