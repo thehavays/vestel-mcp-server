@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "vestel-jira-mcp": "./index.js"
+  },
   "license": "MIT",
   "files": [
     "index.js",
