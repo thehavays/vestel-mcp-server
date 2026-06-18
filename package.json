@@ -1,0 +1,20 @@
+{
+  "name": "vestel-jira-mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.4.1",
+    "axios": "^1.7.9"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}

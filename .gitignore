@@ -1,0 +1,6 @@
+node_modules/
+.agents/
+.env
+dist/
+*.tgz
+*.log
