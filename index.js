@@ -7,6 +7,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import axios from 'axios';
 import https from 'https';
+import fs from 'fs';
+import path from 'path';
 
 const JIRA_URL = process.env.JIRA_URL;
 const JIRA_USERNAME = process.env.JIRA_USERNAME;
@@ -33,6 +35,63 @@ if (!JIRA_REJECT_UNAUTHORIZED) {
 const httpsAgent = new https.Agent({
   rejectUnauthorized: JIRA_REJECT_UNAUTHORIZED,
 });
+
+// Load configuration from file if it exists, otherwise fall back to environment variables
+let allowedProjects = null;
+let allowedTools = null;
+
+try {
+  const configPath = path.join(process.cwd(), '.jira-config.json');
+  if (fs.existsSync(configPath)) {
+    const configData = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    if (configData.allowedProjects && Array.isArray(configData.allowedProjects)) {
+      allowedProjects = configData.allowedProjects.map(p => p.trim().toUpperCase());
+    }
+    if (configData.allowedTools && Array.isArray(configData.allowedTools)) {
+      allowedTools = configData.allowedTools.map(t => t.trim());
+    }
+  }
+} catch (configError) {
+  console.error('Warning: Error reading .jira-config.json:', configError.message);
+}
+
+// Fallback or merge with environment variables
+if (!allowedProjects && process.env.ALLOWED_PROJECTS) {
+  const envProj = process.env.ALLOWED_PROJECTS;
+  if (envProj !== '*' && envProj.toLowerCase() !== 'all') {
+    allowedProjects = envProj.split(',').map(p => p.trim().toUpperCase());
+  }
+}
+
+if (!allowedTools && process.env.ALLOWED_TOOLS) {
+  const envTools = process.env.ALLOWED_TOOLS;
+  if (envTools !== '*' && envTools.toLowerCase() !== 'all') {
+    allowedTools = envTools.split(',').map(t => t.trim());
+  }
+}
+
+function isProjectAllowed(projectKey) {
+  if (!allowedProjects || allowedProjects.includes('*')) return true;
+  return allowedProjects.includes(projectKey.toUpperCase());
+}
+
+function getProjectFromIssueKey(issueKey) {
+  if (!issueKey || typeof issueKey !== 'string') return null;
+  const parts = issueKey.split('-');
+  return parts[0] ? parts[0].toUpperCase() : null;
+}
+
+function enforceJqlSecurity(jql) {
+  if (!allowedProjects || allowedProjects.includes('*')) return jql;
+  if (allowedProjects.length === 0) {
+    return 'project = EMPTY';
+  }
+  const projectInClause = `project in (${allowedProjects.join(', ')})`;
+  if (!jql || jql.trim() === '') {
+    return projectInClause;
+  }
+  return `(${jql}) AND ${projectInClause}`;
+}
 
 // Construct the correct authorization header (Basic or Bearer)
 const authHeader = JIRA_AUTH_TYPE === 'bearer' || !JIRA_USERNAME
@@ -62,268 +121,403 @@ const server = new Server(
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: 'jira_get_issue',
-        description: 'Retrieve details of a specific Jira issue, including description, comments, assignee, status, reporter, and summary.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            issueKey: {
-              type: 'string',
-              description: 'The issue key (e.g., PROJ-123).',
-            },
+  const allTools = [
+    {
+      name: 'jira_get_issue',
+      description: 'Retrieve details of a specific Jira issue, including description, comments, assignee, status, reporter, summary, issue type, priority, and linked issues.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: {
+            type: 'string',
+            description: 'The issue key (e.g., PROJ-123).',
           },
-          required: ['issueKey'],
         },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            key: { type: 'string', description: 'The issue key.' },
-            summary: { type: 'string', description: 'Summary/title of the issue.' },
-            status: { type: 'string', description: 'Current status of the issue.' },
-            assignee: { type: 'string', description: 'Username of the assignee.' },
-            reporter: { type: 'string', description: 'Username of the reporter.' },
-            description: { type: 'string', description: 'Description of the issue.' },
-            comments: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  author: { type: 'string' },
-                  body: { type: 'string' },
-                  created: { type: 'string' },
-                },
-                required: ['author', 'body', 'created'],
-              },
-            },
-          },
-          required: ['key', 'summary', 'status', 'assignee', 'reporter', 'description', 'comments'],
-        },
+        required: ['issueKey'],
       },
-      {
-        name: 'jira_get_issues_by_assignee',
-        description: 'Get list of open/active issues assigned to a specific username (checks for Pending, Submitted, In Progress, Open, and Reopened statuses).',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            username: {
-              type: 'string',
-              description: 'The Jira username of the assignee.',
-            },
-            maxResults: {
-              type: 'number',
-              description: 'Maximum number of issues to return (default 50).',
-            },
-          },
-          required: ['username'],
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            issues: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  key: { type: 'string' },
-                  summary: { type: 'string' },
-                  status: { type: 'string' },
-                  updated: { type: 'string' },
-                },
-                required: ['key', 'summary', 'status', 'updated'],
-              },
-            },
-          },
-          required: ['issues'],
-        },
-      },
-      {
-        name: 'jira_get_review_issues_by_assignee',
-        description: 'Get list of issues in a review status (e.g., Review, Code Review, Under Review, In Review) assigned to a specific username.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            username: {
-              type: 'string',
-              description: 'The Jira username of the assignee.',
-            },
-            maxResults: {
-              type: 'number',
-              description: 'Maximum number of issues to return (default 50).',
-            },
-          },
-          required: ['username'],
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            issues: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  key: { type: 'string' },
-                  summary: { type: 'string' },
-                  status: { type: 'string' },
-                  updated: { type: 'string' },
-                },
-                required: ['key', 'summary', 'status', 'updated'],
-              },
-            },
-          },
-          required: ['issues'],
-        },
-      },
-      {
-        name: 'jira_create_issue',
-        description: 'Create a new issue in a project.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            projectKey: {
-              type: 'string',
-              description: 'Key of the project (e.g., PROJ).',
-            },
-            summary: {
-              type: 'string',
-              description: 'Summary/title of the issue.',
-            },
-            description: {
-              type: 'string',
-              description: 'Description of the issue.',
-            },
-            issueType: {
-              type: 'string',
-              description: 'Type of the issue (e.g., Bug, Task, Story).',
-            },
-          },
-          required: ['projectKey', 'summary', 'description', 'issueType'],
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            key: { type: 'string', description: 'The key of the newly created issue.' },
-            url: { type: 'string', description: 'The web link of the newly created issue.' },
-          },
-          required: ['key', 'url'],
-        },
-      },
-      {
-        name: 'jira_update_issue',
-        description: 'Update fields of an existing issue.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            issueKey: {
-              type: 'string',
-              description: 'Key of the issue to update.',
-            },
-            fields: {
+      outputSchema: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', description: 'The issue key.' },
+          summary: { type: 'string', description: 'Summary/title of the issue.' },
+          status: { type: 'string', description: 'Current status of the issue.' },
+          assignee: { type: 'string', description: 'Username of the assignee.' },
+          reporter: { type: 'string', description: 'Username of the reporter.' },
+          description: { type: 'string', description: 'Description of the issue.' },
+          issueType: { type: 'string', description: 'The issue type (e.g. Bug, Story, Task).' },
+          priority: { type: 'string', description: 'Priority level of the issue.' },
+          linkedIssues: {
+            type: 'array',
+            description: 'List of linked issues/dependencies.',
+            items: {
               type: 'object',
-              description: 'A key-value map of fields to update (e.g., {"summary": "New Title", "description": "New Desc"}).',
-            },
-          },
-          required: ['issueKey', 'fields'],
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            issueKey: { type: 'string', description: 'The key of the updated issue.' },
-            success: { type: 'boolean', description: 'Whether the update succeeded.' },
-          },
-          required: ['issueKey', 'success'],
-        },
-      },
-      {
-        name: 'jira_add_comment',
-        description: 'Add a comment to an issue.',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            issueKey: {
-              type: 'string',
-              description: 'The issue key to add the comment to.',
-            },
-            comment: {
-              type: 'string',
-              description: 'The comment body/text.',
-            },
-          },
-          required: ['issueKey', 'comment'],
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            issueKey: { type: 'string', description: 'The key of the commented issue.' },
-            commentId: { type: 'string', description: 'The ID of the created comment.' },
-            success: { type: 'boolean', description: 'Whether the comment addition succeeded.' },
-          },
-          required: ['issueKey', 'commentId', 'success'],
-        },
-      },
-      {
-        name: 'jira_search_issues',
-        description: 'Search Jira issues using JQL (Jira Query Language).',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            jql: {
-              type: 'string',
-              description: 'JQL query (e.g., project = PROJ AND status = "In Progress").',
-            },
-            maxResults: {
-              type: 'number',
-              description: 'Maximum number of results (default 50).',
-            },
-          },
-          required: ['jql'],
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            issues: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  key: { type: 'string' },
-                  summary: { type: 'string' },
-                  status: { type: 'string' },
-                  assignee: { type: 'string' },
-                  updated: { type: 'string' },
-                },
-                required: ['key', 'summary', 'status', 'assignee', 'updated'],
+              properties: {
+                direction: { type: 'string', description: 'Link direction: inward or outward.' },
+                linkType: { type: 'string', description: 'Type of link (e.g., Blocks, Relates).' },
+                key: { type: 'string', description: 'Key of the linked issue.' },
+                summary: { type: 'string', description: 'Summary of the linked issue.' },
+                status: { type: 'string', description: 'Status of the linked issue.' },
+                issueType: { type: 'string', description: 'Issue type of the linked issue.' },
+                priority: { type: 'string', description: 'Priority of the linked issue.' },
               },
+              required: ['direction', 'linkType', 'key', 'summary', 'status', 'issueType', 'priority'],
             },
           },
-          required: ['issues'],
+          comments: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                author: { type: 'string' },
+                body: { type: 'string' },
+                created: { type: 'string' },
+              },
+              required: ['author', 'body', 'created'],
+            },
+          },
         },
+        required: ['key', 'summary', 'status', 'assignee', 'reporter', 'description', 'issueType', 'priority', 'linkedIssues', 'comments'],
       },
-    ],
+    },
+    {
+      name: 'jira_get_issues_by_assignee',
+      description: 'Get list of open/active issues assigned to a specific username (checks for Pending, Submitted, In Progress, Open, and Reopened statuses). Output includes issue type, priority, and linked issues.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          username: {
+            type: 'string',
+            description: 'The Jira username of the assignee.',
+          },
+          maxResults: {
+            type: 'number',
+            description: 'Maximum number of issues to return (default 50).',
+          },
+        },
+        required: ['username'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string' },
+                summary: { type: 'string' },
+                status: { type: 'string' },
+                updated: { type: 'string' },
+                issueType: { type: 'string' },
+                priority: { type: 'string' },
+                linkedIssues: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      direction: { type: 'string' },
+                      linkType: { type: 'string' },
+                      key: { type: 'string' },
+                      summary: { type: 'string' },
+                      status: { type: 'string' },
+                      issueType: { type: 'string' },
+                      priority: { type: 'string' },
+                    },
+                    required: ['direction', 'linkType', 'key', 'summary', 'status', 'issueType', 'priority'],
+                  },
+                },
+              },
+              required: ['key', 'summary', 'status', 'updated', 'issueType', 'priority', 'linkedIssues'],
+            },
+          },
+        },
+        required: ['issues'],
+      },
+    },
+    {
+      name: 'jira_get_review_issues_by_assignee',
+      description: 'Get list of issues in a review status (e.g., Review, Code Review, Under Review, In Review) assigned to a specific username. Output includes issue type, priority, and linked issues.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          username: {
+            type: 'string',
+            description: 'The Jira username of the assignee.',
+          },
+          maxResults: {
+            type: 'number',
+            description: 'Maximum number of issues to return (default 50).',
+          },
+        },
+        required: ['username'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string' },
+                summary: { type: 'string' },
+                status: { type: 'string' },
+                updated: { type: 'string' },
+                issueType: { type: 'string' },
+                priority: { type: 'string' },
+                linkedIssues: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      direction: { type: 'string' },
+                      linkType: { type: 'string' },
+                      key: { type: 'string' },
+                      summary: { type: 'string' },
+                      status: { type: 'string' },
+                      issueType: { type: 'string' },
+                      priority: { type: 'string' },
+                    },
+                    required: ['direction', 'linkType', 'key', 'summary', 'status', 'issueType', 'priority'],
+                  },
+                },
+              },
+              required: ['key', 'summary', 'status', 'updated', 'issueType', 'priority', 'linkedIssues'],
+            },
+          },
+        },
+        required: ['issues'],
+      },
+    },
+    {
+      name: 'jira_create_issue',
+      description: 'Create a new issue in a project.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectKey: {
+            type: 'string',
+            description: 'Key of the project (e.g., PROJ).',
+          },
+          summary: {
+            type: 'string',
+            description: 'Summary/title of the issue.',
+          },
+          description: {
+            type: 'string',
+            description: 'Description of the issue.',
+          },
+          issueType: {
+            type: 'string',
+            description: 'Type of the issue (e.g., Bug, Task, Story).',
+          },
+        },
+        required: ['projectKey', 'summary', 'description', 'issueType'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', description: 'The key of the newly created issue.' },
+          url: { type: 'string', description: 'The web link of the newly created issue.' },
+        },
+        required: ['key', 'url'],
+      },
+    },
+    {
+      name: 'jira_update_issue',
+      description: 'Update fields of an existing issue.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: {
+            type: 'string',
+            description: 'Key of the issue to update.',
+          },
+          fields: {
+            type: 'object',
+            description: 'A key-value map of fields to update (e.g., {"summary": "New Title", "description": "New Desc"}).',
+          },
+        },
+        required: ['issueKey', 'fields'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: { type: 'string', description: 'The key of the updated issue.' },
+          success: { type: 'boolean', description: 'Whether the update succeeded.' },
+        },
+        required: ['issueKey', 'success'],
+      },
+    },
+    {
+      name: 'jira_add_comment',
+      description: 'Add a comment to an issue.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: {
+            type: 'string',
+            description: 'The issue key to add the comment to.',
+          },
+          comment: {
+            type: 'string',
+            description: 'The comment body/text.',
+          },
+        },
+        required: ['issueKey', 'comment'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: { type: 'string', description: 'The key of the commented issue.' },
+          commentId: { type: 'string', description: 'The ID of the created comment.' },
+          success: { type: 'boolean', description: 'Whether the comment addition succeeded.' },
+        },
+        required: ['issueKey', 'commentId', 'success'],
+      },
+    },
+    {
+      name: 'jira_search_issues',
+      description: 'Search Jira issues using JQL (Jira Query Language). Output includes issue type, priority, and linked issues.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          jql: {
+            type: 'string',
+            description: 'JQL query (e.g., project = PROJ AND status = "In Progress").',
+          },
+          maxResults: {
+            type: 'number',
+            description: 'Maximum number of results (default 50).',
+          },
+        },
+        required: ['jql'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string' },
+                summary: { type: 'string' },
+                status: { type: 'string' },
+                assignee: { type: 'string' },
+                updated: { type: 'string' },
+                issueType: { type: 'string' },
+                priority: { type: 'string' },
+                linkedIssues: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      direction: { type: 'string' },
+                      linkType: { type: 'string' },
+                      key: { type: 'string' },
+                      summary: { type: 'string' },
+                      status: { type: 'string' },
+                      issueType: { type: 'string' },
+                      priority: { type: 'string' },
+                    },
+                    required: ['direction', 'linkType', 'key', 'summary', 'status', 'issueType', 'priority'],
+                  },
+                },
+              },
+              required: ['key', 'summary', 'status', 'assignee', 'updated', 'issueType', 'priority', 'linkedIssues'],
+            },
+          },
+        },
+        required: ['issues'],
+      },
+    },
+  ];
+
+  const filteredTools = allowedTools && !allowedTools.includes('*')
+    ? allTools.filter(t => allowedTools.includes(t.name))
+    : allTools;
+
+  return {
+    tools: filteredTools,
   };
 });
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
+  // Security Check: Tool Allowlist
+  if (allowedTools && !allowedTools.includes('*') && !allowedTools.includes(name)) {
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Security Exception: Tool "${name}" is not in the allowed tools list.`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  // Security Check: Project Allowlist
+  if (args) {
+    if (args.projectKey && !isProjectAllowed(args.projectKey)) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Security Exception: Project "${args.projectKey}" is not in the allowed projects list.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    if (args.issueKey) {
+      const proj = getProjectFromIssueKey(args.issueKey);
+      if (!proj || !isProjectAllowed(proj)) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Security Exception: Project "${proj || 'Unknown'}" associated with issue "${args.issueKey}" is not in the allowed projects list.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+  }
+
   try {
     switch (name) {
       case 'jira_get_issue': {
         const { issueKey } = args;
-        // Fetch details from Jira REST API
         const response = await jiraClient.get(`/rest/api/2/issue/${encodeURIComponent(issueKey)}`);
         const issue = response.data;
         const details = {
           key: issue.key,
           summary: issue.fields.summary,
           status: issue.fields.status ? issue.fields.status.name : 'Unknown',
-          assignee: issue.fields.assignee ? issue.fields.assignee.name : 'Unassigned',
-          reporter: issue.fields.reporter ? issue.fields.reporter.name : 'Unknown',
+          assignee: issue.fields.assignee ? (issue.fields.assignee.name || issue.fields.assignee.displayName) : 'Unassigned',
+          reporter: issue.fields.reporter ? (issue.fields.reporter.name || issue.fields.reporter.displayName) : 'Unknown',
           description: issue.fields.description || 'No description provided.',
+          issueType: issue.fields.issuetype ? issue.fields.issuetype.name : 'Unknown',
+          priority: issue.fields.priority ? issue.fields.priority.name : 'None',
+          linkedIssues: (issue.fields.issuelinks || []).map(link => {
+            const isOutward = !!link.outwardIssue;
+            const linkedIssue = link.outwardIssue || link.inwardIssue;
+            return {
+              direction: isOutward ? 'outward' : 'inward',
+              linkType: isOutward ? link.type.outward : link.type.inward,
+              key: linkedIssue.key,
+              summary: linkedIssue.fields?.summary || 'No summary',
+              status: linkedIssue.fields?.status?.name || 'Unknown',
+              issueType: linkedIssue.fields?.issuetype?.name || 'Unknown',
+              priority: linkedIssue.fields?.priority?.name || 'None',
+            };
+          }),
           comments: (issue.fields.comment?.comments || []).map(c => ({
-            author: c.author ? c.author.name : 'Unknown',
+            author: c.author ? (c.author.name || c.author.displayName) : 'Unknown',
             body: c.body,
             created: c.created,
           })),
@@ -342,7 +536,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'jira_get_issues_by_assignee': {
         const { username, maxResults = 50 } = args;
-        const jql = `assignee = "${username}" AND status in (Pending, Submitted, "In Progress", Open, Reopened) ORDER BY updated DESC`;
+        let jql = `assignee = "${username}" AND status in (Pending, Submitted, "In Progress", Open, Reopened) ORDER BY updated DESC`;
+        jql = enforceJqlSecurity(jql);
         const response = await jiraClient.get('/rest/api/2/search', {
           params: { jql, maxResults },
         });
@@ -352,6 +547,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary: issue.fields.summary,
           status: issue.fields.status ? issue.fields.status.name : 'Unknown',
           updated: issue.fields.updated,
+          issueType: issue.fields.issuetype ? issue.fields.issuetype.name : 'Unknown',
+          priority: issue.fields.priority ? issue.fields.priority.name : 'None',
+          linkedIssues: (issue.fields.issuelinks || []).map(link => {
+            const isOutward = !!link.outwardIssue;
+            const linkedIssue = link.outwardIssue || link.inwardIssue;
+            return {
+              direction: isOutward ? 'outward' : 'inward',
+              linkType: isOutward ? link.type.outward : link.type.inward,
+              key: linkedIssue.key,
+              summary: linkedIssue.fields?.summary || 'No summary',
+              status: linkedIssue.fields?.status?.name || 'Unknown',
+              issueType: linkedIssue.fields?.issuetype?.name || 'Unknown',
+              priority: linkedIssue.fields?.priority?.name || 'None',
+            };
+          }),
         }));
 
         return {
@@ -367,7 +577,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'jira_get_review_issues_by_assignee': {
         const { username, maxResults = 50 } = args;
-        const jql = `assignee = "${username}" AND status in (Review, "Code Review", "Under Review", "In Review") ORDER BY updated DESC`;
+        let jql = `assignee = "${username}" AND status in (Review, "Code Review", "Under Review", "In Review") ORDER BY updated DESC`;
+        jql = enforceJqlSecurity(jql);
         const response = await jiraClient.get('/rest/api/2/search', {
           params: { jql, maxResults },
         });
@@ -377,6 +588,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           summary: issue.fields.summary,
           status: issue.fields.status ? issue.fields.status.name : 'Unknown',
           updated: issue.fields.updated,
+          issueType: issue.fields.issuetype ? issue.fields.issuetype.name : 'Unknown',
+          priority: issue.fields.priority ? issue.fields.priority.name : 'None',
+          linkedIssues: (issue.fields.issuelinks || []).map(link => {
+            const isOutward = !!link.outwardIssue;
+            const linkedIssue = link.outwardIssue || link.inwardIssue;
+            return {
+              direction: isOutward ? 'outward' : 'inward',
+              linkType: isOutward ? link.type.outward : link.type.inward,
+              key: linkedIssue.key,
+              summary: linkedIssue.fields?.summary || 'No summary',
+              status: linkedIssue.fields?.status?.name || 'Unknown',
+              issueType: linkedIssue.fields?.issuetype?.name || 'Unknown',
+              priority: linkedIssue.fields?.priority?.name || 'None',
+            };
+          }),
         }));
 
         return {
@@ -463,16 +689,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'jira_search_issues': {
         const { jql, maxResults = 50 } = args;
+        const securedJql = enforceJqlSecurity(jql);
         const response = await jiraClient.get('/rest/api/2/search', {
-          params: { jql, maxResults },
+          params: { jql: securedJql, maxResults },
         });
 
         const issues = (response.data.issues || []).map(issue => ({
           key: issue.key,
           summary: issue.fields.summary,
           status: issue.fields.status ? issue.fields.status.name : 'Unknown',
-          assignee: issue.fields.assignee ? issue.fields.assignee.name : 'Unassigned',
+          assignee: issue.fields.assignee ? (issue.fields.assignee.name || issue.fields.assignee.displayName) : 'Unassigned',
           updated: issue.fields.updated,
+          issueType: issue.fields.issuetype ? issue.fields.issuetype.name : 'Unknown',
+          priority: issue.fields.priority ? issue.fields.priority.name : 'None',
+          linkedIssues: (issue.fields.issuelinks || []).map(link => {
+            const isOutward = !!link.outwardIssue;
+            const linkedIssue = link.outwardIssue || link.inwardIssue;
+            return {
+              direction: isOutward ? 'outward' : 'inward',
+              linkType: isOutward ? link.type.outward : link.type.inward,
+              key: linkedIssue.key,
+              summary: linkedIssue.fields?.summary || 'No summary',
+              status: linkedIssue.fields?.status?.name || 'Unknown',
+              issueType: linkedIssue.fields?.issuetype?.name || 'Unknown',
+              priority: linkedIssue.fields?.priority?.name || 'None',
+            };
+          }),
         }));
 
         return {
