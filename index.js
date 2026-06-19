@@ -9,6 +9,7 @@ import axios from 'axios';
 import https from 'https';
 import fs from 'fs';
 import path from 'path';
+import { parseStringPromise } from 'xml2js';
 
 const JIRA_URL = process.env.JIRA_URL;
 const JIRA_USERNAME = process.env.JIRA_USERNAME;
@@ -335,7 +336,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           fields: {
             type: 'object',
-            description: 'A key-value map of fields to update (e.g., {"summary": "New Title", "description": "New Desc"}).',
+            description: 'A key-value map of fields to update. Commonly supported fields include:\n- summary: string (e.g. "New Title")\n- description: string (e.g. "New description details")\n- priority: object with name/id (e.g. {"name": "High"})\n- assignee: object with name (e.g. {"name": "username"}, or {"name": null} to unassign)\n- labels: array of strings (e.g. ["tag1", "tag2"])\n- duedate: string in YYYY-MM-DD format (e.g. "2026-06-30")\n- components: array of objects with name (e.g. [{"name": "Database"}])\n- fixVersions: array of objects with name (e.g. [{"name": "1.1.0"}])',
           },
         },
         required: ['issueKey', 'fields'],
@@ -430,6 +431,103 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
         required: ['issues'],
+      },
+    },
+    {
+      name: 'jira_get_watched_issues',
+      description: 'Get list of open/active issues watched by a specific username (or the authenticated user if omitted). Checks for open statuses (e.g., Pending, In Progress, Open). Output includes issue type, priority, and linked issues.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          username: {
+            type: 'string',
+            description: 'The Jira username of the watcher. If omitted, uses the currently authenticated user.',
+          },
+          maxResults: {
+            type: 'number',
+            description: 'Maximum number of issues to return (default 50).',
+          },
+        },
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issues: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                key: { type: 'string' },
+                summary: { type: 'string' },
+                status: { type: 'string' },
+                updated: { type: 'string' },
+                issueType: { type: 'string' },
+                priority: { type: 'string' },
+                linkedIssues: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      direction: { type: 'string' },
+                      linkType: { type: 'string' },
+                      key: { type: 'string' },
+                      summary: { type: 'string' },
+                      status: { type: 'string' },
+                      issueType: { type: 'string' },
+                      priority: { type: 'string' },
+                    },
+                    required: ['direction', 'linkType', 'key', 'summary', 'status', 'issueType', 'priority'],
+                  },
+                },
+              },
+              required: ['key', 'summary', 'status', 'updated', 'issueType', 'priority', 'linkedIssues'],
+            },
+          },
+        },
+        required: ['issues'],
+      },
+    },
+    {
+      name: 'jira_get_user_activities',
+      description: 'Get a feed of recent activities performed by a specific user (e.g., comments, status changes, updates). Note: This uses the Jira Activity Stream and may return activities across the instance depending on visibility.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          username: {
+            type: 'string',
+            description: 'The Jira username to fetch activities for. If omitted, fetches activities for the authenticated user.',
+          },
+          startDate: {
+            type: 'string',
+            description: 'Start date in YYYY-MM-DD format.',
+          },
+          endDate: {
+            type: 'string',
+            description: 'End date in YYYY-MM-DD format.',
+          },
+          maxResults: {
+            type: 'number',
+            description: 'Maximum number of activity items to return (default 50).',
+          },
+        },
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          activities: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', description: 'Activity summary (e.g., User commented on ISSUE-1)' },
+                published: { type: 'string', description: 'When the activity occurred' },
+                content: { type: 'string', description: 'Detailed content/HTML of the activity' },
+                url: { type: 'string', description: 'Link to the activity/issue' },
+              },
+            },
+          },
+        },
+        required: ['activities'],
       },
     },
   ];
@@ -726,6 +824,132 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ],
           structuredContent: { issues },
         };
+      }
+
+      case 'jira_get_watched_issues': {
+        const { username, maxResults = 50 } = args || {};
+        const watcherClause = username ? `watcher = "${username}"` : 'watcher = currentUser()';
+        let jql = `${watcherClause} AND status in (Pending, Submitted, "In Progress", Open, Reopened) ORDER BY updated DESC`;
+        jql = enforceJqlSecurity(jql);
+        const response = await jiraClient.get('/rest/api/2/search', {
+          params: { jql, maxResults },
+        });
+
+        const issues = (response.data.issues || []).map(issue => ({
+          key: issue.key,
+          summary: issue.fields.summary,
+          status: issue.fields.status ? issue.fields.status.name : 'Unknown',
+          updated: issue.fields.updated,
+          issueType: issue.fields.issuetype ? issue.fields.issuetype.name : 'Unknown',
+          priority: issue.fields.priority ? issue.fields.priority.name : 'None',
+          linkedIssues: (issue.fields.issuelinks || []).map(link => {
+            const isOutward = !!link.outwardIssue;
+            const linkedIssue = link.outwardIssue || link.inwardIssue;
+            return {
+              direction: isOutward ? 'outward' : 'inward',
+              linkType: isOutward ? link.type.outward : link.type.inward,
+              key: linkedIssue.key,
+              summary: linkedIssue.fields?.summary || 'No summary',
+              status: linkedIssue.fields?.status?.name || 'Unknown',
+              issueType: linkedIssue.fields?.issuetype?.name || 'Unknown',
+              priority: linkedIssue.fields?.priority?.name || 'None',
+            };
+          }),
+        }));
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(issues, null, 2),
+            },
+          ],
+          structuredContent: { issues },
+        };
+      }
+
+      case 'jira_get_user_activities': {
+        const { username, startDate, endDate, maxResults = 50 } = args || {};
+        
+        let activityUrl = '/activity?maxResults=' + encodeURIComponent(maxResults);
+        if (username) {
+          activityUrl += '&streams=user+IS+' + encodeURIComponent(username);
+        }
+        if (startDate && endDate) {
+          const startMs = new Date(startDate).getTime();
+          const endMs = new Date(endDate).getTime() + 86399999;
+          if (!isNaN(startMs) && !isNaN(endMs)) {
+            activityUrl += `&streams=update-date+BETWEEN+${startMs}+AND+${endMs}`;
+          }
+        } else if (startDate) {
+          const startMs = new Date(startDate).getTime();
+          if (!isNaN(startMs)) {
+            activityUrl += `&streams=update-date+AFTER+${startMs}`;
+          }
+        } else if (endDate) {
+          const endMs = new Date(endDate).getTime() + 86399999;
+          if (!isNaN(endMs)) {
+            activityUrl += `&streams=update-date+BEFORE+${endMs}`;
+          }
+        }
+        
+        try {
+          const response = await jiraClient.get(activityUrl, {
+            headers: {
+              'Accept': 'application/xml, text/xml',
+            },
+          });
+          
+          const xmlData = response.data;
+          const result = await parseStringPromise(xmlData);
+          
+          let entries = [];
+          if (result && result.feed && result.feed.entry) {
+            entries = result.feed.entry.map(entry => {
+              let url = '';
+              if (entry.link && entry.link.length > 0) {
+                const altLink = entry.link.find(l => l.$ && l.$.rel === 'alternate');
+                url = altLink ? altLink.$.href : entry.link[0].$.href;
+              }
+              
+              let title = entry.title ? entry.title[0] : 'Unknown activity';
+              if (typeof title === 'object' && title._) title = title._;
+              title = title.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+              
+              let content = entry.content ? entry.content[0] : '';
+              if (typeof content === 'object' && content._) content = content._;
+              content = content.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
+              
+              return {
+                title,
+                published: entry.published ? entry.published[0] : 'Unknown time',
+                content: content || 'No detailed content',
+                url
+              };
+            });
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(entries, null, 2),
+              },
+            ],
+            structuredContent: { activities: entries },
+          };
+        } catch (error) {
+          console.error('Error fetching or parsing activity stream:', error.message);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Error fetching user activities. Activity Streams may be disabled or inaccessible. Details: ${error.message}`,
+              },
+            ],
+            isError: true,
+          };
+        }
       }
 
       default:

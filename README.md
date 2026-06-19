@@ -135,6 +135,22 @@ Search using JQL.
   - `maxResults` (number, optional)
 * **Output Schema**: `{ issues: Array<{ key, summary, status, assignee, updated, issueType, priority, linkedIssues: Array<{ direction, linkType, key, summary, status, issueType, priority }> }> }`
 
+### `jira_get_watched_issues`
+Retrieve a list of open/active issues watched by a specific user or the authenticated user.
+* **Input Schema**:
+  - `username` (string, optional): The Jira username of the watcher.
+  - `maxResults` (number, optional): Defaults to `50`.
+* **Output Schema**: `{ issues: Array<{ key, summary, status, updated, issueType, priority, linkedIssues: Array<{ direction, linkType, key, summary, status, issueType, priority }> }> }`
+
+### `jira_get_user_activities`
+Fetch a timeline feed of recent activities (comments, transitions, updates) performed by a user using the Jira Activity Stream.
+* **Input Schema**:
+  - `username` (string, optional): The Jira username to fetch activities for.
+  - `startDate` (string, optional): Start date in `YYYY-MM-DD` format.
+  - `endDate` (string, optional): End date in `YYYY-MM-DD` format.
+  - `maxResults` (number, optional): Defaults to `50`.
+* **Output Schema**: `{ activities: Array<{ title, published, content, url }> }`
+
 ---
 
 ## Sharing and Distribution
