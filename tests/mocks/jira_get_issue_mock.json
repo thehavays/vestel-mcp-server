@@ -1,0 +1,35 @@
+{
+  "key": "PROJ-123",
+  "fields": {
+    "summary": "Example Issue Summary",
+    "status": { "name": "In Progress" },
+    "assignee": { "name": "john.doe", "displayName": "John Doe" },
+    "reporter": { "name": "jane.smith", "displayName": "Jane Smith" },
+    "description": "This is a detailed description of the issue.",
+    "issuetype": { "name": "Bug" },
+    "priority": { "name": "High" },
+    "issuelinks": [
+      {
+        "type": { "inward": "is blocked by", "outward": "blocks" },
+        "outwardIssue": {
+          "key": "PROJ-124",
+          "fields": {
+            "summary": "Blocker task",
+            "status": { "name": "Open" },
+            "issuetype": { "name": "Task" },
+            "priority": { "name": "Medium" }
+          }
+        }
+      }
+    ],
+    "comment": {
+      "comments": [
+        {
+          "author": { "name": "jane.smith", "displayName": "Jane Smith" },
+          "body": "This is a comment on the issue.",
+          "created": "2026-06-27T10:00:00.000+0000"
+        }
+      ]
+    }
+  }
+}

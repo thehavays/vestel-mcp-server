@@ -11,24 +11,26 @@ import fs from 'fs';
 import path from 'path';
 import { parseStringPromise } from 'xml2js';
 
-const JIRA_URL = process.env.JIRA_URL;
-const JIRA_USERNAME = process.env.JIRA_USERNAME;
-const JIRA_PASSWORD = process.env.JIRA_PASSWORD; // Can be a password or personal access token (PAT)
+const JIRA_URL = process.env.JIRA_URL || (process.env.NODE_ENV === 'test' ? 'https://mock-jira.example.com' : '');
+const JIRA_USERNAME = process.env.JIRA_USERNAME || (process.env.NODE_ENV === 'test' ? 'mock-user' : '');
+const JIRA_PASSWORD = process.env.JIRA_PASSWORD || (process.env.NODE_ENV === 'test' ? 'mock-password' : ''); // Can be a password or personal access token (PAT)
 const JIRA_AUTH_TYPE = (process.env.JIRA_AUTH_TYPE || 'basic').toLowerCase();
 const JIRA_REJECT_UNAUTHORIZED = process.env.JIRA_REJECT_UNAUTHORIZED !== 'false';
 
-if (!JIRA_URL || !JIRA_PASSWORD) {
-  console.error('Error: Missing JIRA_URL or JIRA_PASSWORD environment variables.');
-  process.exit(1);
-}
+if (process.env.NODE_ENV !== 'test') {
+  if (!JIRA_URL || !JIRA_PASSWORD) {
+    console.error('Error: Missing JIRA_URL or JIRA_PASSWORD environment variables.');
+    process.exit(1);
+  }
 
-if (JIRA_AUTH_TYPE === 'basic' && !JIRA_USERNAME) {
-  console.error('Error: JIRA_USERNAME is required when JIRA_AUTH_TYPE is set to "basic".');
-  process.exit(1);
+  if (JIRA_AUTH_TYPE === 'basic' && !JIRA_USERNAME) {
+    console.error('Error: JIRA_USERNAME is required when JIRA_AUTH_TYPE is set to "basic".');
+    process.exit(1);
+  }
 }
 
 // TODO(security): Warn about rejecting unauthorized SSL certificates
-if (!JIRA_REJECT_UNAUTHORIZED) {
+if (!JIRA_REJECT_UNAUTHORIZED && process.env.NODE_ENV !== 'test') {
   console.error('WARNING (Security): SSL verification is disabled. Connection is vulnerable to MITM attacks.');
 }
 
@@ -979,7 +981,11 @@ async function main() {
   console.error('Jira MCP Server running on stdio');
 }
 
-main().catch((error) => {
-  console.error('Fatal error in main:', error);
-  process.exit(1);
-});
+if (process.env.NODE_ENV !== 'test') {
+  main().catch((error) => {
+    console.error('Fatal error in main:', error);
+    process.exit(1);
+  });
+}
+
+export { server, jiraClient, isProjectAllowed, enforceJqlSecurity };
