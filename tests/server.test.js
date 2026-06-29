@@ -51,6 +51,7 @@ describe('Jira MCP Server Tests', () => {
       expect(toolNames).toContain('jira_add_comment');
       expect(toolNames).toContain('jira_get_watched_issues');
       expect(toolNames).toContain('jira_get_user_activities');
+      expect(toolNames).toContain('jira_get_issue_commits');
     });
   });
 
@@ -110,6 +111,67 @@ describe('Jira MCP Server Tests', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('Error executing tool jira_get_issue');
+    });
+
+    it('should handle jira_get_issue_commits and return commits', async () => {
+      const getSpy = vi.spyOn(jiraClient, 'get').mockImplementation((url) => {
+        if (url.includes('/rest/api/2/issue/')) {
+          return Promise.resolve({ data: { id: '10001' } });
+        }
+        if (url.includes('/rest/dev-status/latest/issue/summary')) {
+          return Promise.resolve({
+            data: {
+              summary: {
+                repository: {
+                  byInstanceType: {
+                    'stash': { count: 1 },
+                  },
+                },
+              },
+            },
+          });
+        }
+        if (url.includes('/rest/dev-status/latest/issue/detail')) {
+          return Promise.resolve({
+            data: {
+              detail: [
+                {
+                  repositories: [
+                    {
+                      name: 'my-repo',
+                      url: 'https://bitbucket.example.com/my-repo',
+                      commits: [
+                        {
+                          id: 'abc1234',
+                          message: 'Fix login bug',
+                          author: { name: 'Jane Doe', email: 'jane@example.com' },
+                          authorTimestamp: '2026-06-01T10:00:00.000+0000',
+                          url: 'https://bitbucket.example.com/commits/abc1234',
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          });
+        }
+        return Promise.reject(new Error('Unexpected URL: ' + url));
+      });
+
+      const result = await client.callTool({
+        name: 'jira_get_issue_commits',
+        arguments: { issueKey: 'PROJ-123' },
+      });
+
+      expect(result.isError).toBeUndefined();
+      const data = JSON.parse(result.content[0].text);
+      expect(data.issueKey).toBe('PROJ-123');
+      expect(data.commits).toHaveLength(1);
+      expect(data.commits[0].id).toBe('abc1234');
+      expect(data.commits[0].message).toBe('Fix login bug');
+      expect(data.commits[0].author).toBe('Jane Doe');
+      expect(data.commits[0].repository).toBe('my-repo');
     });
   });
 
