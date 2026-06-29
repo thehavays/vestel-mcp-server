@@ -532,6 +532,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         required: ['activities'],
       },
     },
+    {
+      name: 'jira_get_issue_commits',
+      description: 'Get commits linked to a specific Jira issue via the Jira Development Status (dev-status) API. Returns commit details including hash, message, author, date, and repository info. Requires Jira Software with source control integration (e.g., Bitbucket, GitHub, GitLab).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: {
+            type: 'string',
+            description: 'The issue key (e.g., PROJ-123).',
+          },
+        },
+        required: ['issueKey'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: { type: 'string', description: 'The queried issue key.' },
+          commits: {
+            type: 'array',
+            description: 'List of commits linked to this issue.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Commit hash/ID.' },
+                message: { type: 'string', description: 'Commit message.' },
+                author: { type: 'string', description: 'Author name.' },
+                authorEmail: { type: 'string', description: 'Author email.' },
+                date: { type: 'string', description: 'Commit date (ISO 8601).' },
+                url: { type: 'string', description: 'Link to the commit in the source control tool.' },
+                repository: { type: 'string', description: 'Name of the repository.' },
+                repositoryUrl: { type: 'string', description: 'URL of the repository.' },
+              },
+              required: ['id', 'message', 'author', 'date', 'repository'],
+            },
+          },
+        },
+        required: ['issueKey', 'commits'],
+      },
+    },
   ];
 
   const filteredTools = allowedTools && !allowedTools.includes('*')
@@ -952,6 +991,65 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             isError: true,
           };
         }
+      }
+
+      case 'jira_get_issue_commits': {
+        const { issueKey } = args;
+
+        // Step 1: Resolve the internal numeric issue ID
+        const issueRes = await jiraClient.get(`/rest/api/2/issue/${encodeURIComponent(issueKey)}?fields=id`);
+        const issueId = issueRes.data.id;
+
+        // Step 2: Fetch the dev-status summary to discover which SCM instance types are linked
+        const summaryRes = await jiraClient.get(`/rest/dev-status/latest/issue/summary?issueId=${encodeURIComponent(issueId)}`);
+        const summary = summaryRes.data?.summary;
+
+        const commits = [];
+
+        if (summary && summary.repository && summary.repository.byInstanceType) {
+          const instanceTypes = Object.keys(summary.repository.byInstanceType);
+
+          // Step 3: For each SCM instance type, fetch commit details
+          for (const applicationType of instanceTypes) {
+            try {
+              const detailRes = await jiraClient.get(
+                `/rest/dev-status/latest/issue/detail?issueId=${encodeURIComponent(issueId)}&applicationType=${encodeURIComponent(applicationType)}&dataType=repository`
+              );
+              const repositories = detailRes.data?.detail?.[0]?.repositories || [];
+
+              for (const repo of repositories) {
+                const repoName = repo.name || 'Unknown repository';
+                const repoUrl = repo.url || '';
+                for (const commit of (repo.commits || [])) {
+                  commits.push({
+                    id: commit.id || commit.displayId || '',
+                    message: commit.message || '',
+                    author: commit.author?.name || commit.authorTimestamp || '',
+                    authorEmail: commit.author?.email || '',
+                    date: commit.authorTimestamp || commit.committedDate || '',
+                    url: commit.url || '',
+                    repository: repoName,
+                    repositoryUrl: repoUrl,
+                  });
+                }
+              }
+            } catch (detailError) {
+              // Log and continue if one instance type fails
+              console.error(`Error fetching dev-status detail for type ${applicationType}:`, detailError.message);
+            }
+          }
+        }
+
+        const result = { issueKey, commits };
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+          structuredContent: result,
+        };
       }
 
       default:

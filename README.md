@@ -8,6 +8,7 @@ An integration server built on the [Model Context Protocol (MCP)](https://modelc
 - **Fetch Issue Details**: Retrieve key fields, descriptions, and comments.
 - **Query Issues via JQL**: Perform flexible Jira Query Language searches.
 - **Manage Issues**: Create new issues, update fields, and add comments.
+- **Get Issue Commits**: Fetch commits linked to an issue via the Jira Development Status API (supports Bitbucket, FishEye/Crucible, GitHub, GitLab integrations).
 - **Strict Schema Compliance**: All tools declare input and output schemas conforming to the MCP specifications.
 
 ---
@@ -150,6 +151,34 @@ Fetch a timeline feed of recent activities (comments, transitions, updates) perf
   - `endDate` (string, optional): End date in `YYYY-MM-DD` format.
   - `maxResults` (number, optional): Defaults to `50`.
 * **Output Schema**: `{ activities: Array<{ title, published, content, url }> }`
+
+### `jira_get_issue_commits`
+Fetch commits linked to a specific Jira issue via the Jira Development Status API (`/rest/dev-status/latest/issue/*`). Supports any SCM integration configured in your Jira instance, including Bitbucket, FishEye/Crucible, GitHub, and GitLab.
+
+> [!NOTE]
+> Requires Jira Software with an active source control integration (e.g., Bitbucket Server, FishEye/Crucible, GitHub for Jira). The tool automatically discovers all linked SCM instance types and fetches commits from each.
+
+* **Input Schema**:
+  - `issueKey` (string, required): The issue key (e.g., `PROJ-123`).
+* **Output Schema**: `{ issueKey, commits: Array<{ id, message, author, authorEmail, date, url, repository, repositoryUrl }> }`
+* **Example Output**:
+  ```json
+  {
+    "issueKey": "PROJ-123",
+    "commits": [
+      {
+        "id": "abc1234",
+        "message": "BUGFIX PROJ-123: Fix login bug",
+        "author": "Jane Doe",
+        "authorEmail": "jane@example.com",
+        "date": "2026-05-22T17:38:17.589+0300",
+        "url": "https://your-scm.example.com/commits/abc1234",
+        "repository": "my-repo",
+        "repositoryUrl": "https://your-scm.example.com/browse/my-repo"
+      }
+    ]
+  }
+  ```
 
 ---
 
