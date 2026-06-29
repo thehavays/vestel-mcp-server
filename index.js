@@ -571,6 +571,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         required: ['issueKey', 'commits'],
       },
     },
+    {
+      name: 'jira_get_version_commits',
+      description: 'Get all commits linked to a specific Jira project version (fixVersion) by aggregating commits from every issue that belongs to that version. Uses JQL to find the issues and the Jira Development Status API to fetch commits per issue. Requires Jira Software with source control integration (e.g., Bitbucket, FishEye/Crucible, GitHub, GitLab).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectKey: {
+            type: 'string',
+            description: 'The project key (e.g., COMA).',
+          },
+          version: {
+            type: 'string',
+            description: 'The fixVersion name exactly as it appears in Jira (e.g., v1.18.9).',
+          },
+          maxIssues: {
+            type: 'number',
+            description: 'Maximum number of issues to scan (default 100). Each issue triggers a dev-status API call.',
+          },
+        },
+        required: ['projectKey', 'version'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          projectKey: { type: 'string', description: 'The queried project key.' },
+          version: { type: 'string', description: 'The queried version name.' },
+          issueCount: { type: 'number', description: 'Number of issues scanned.' },
+          commits: {
+            type: 'array',
+            description: 'Aggregated commits from all issues in this version.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Commit hash/ID.' },
+                message: { type: 'string', description: 'Commit message.' },
+                author: { type: 'string', description: 'Author name.' },
+                authorEmail: { type: 'string', description: 'Author email.' },
+                date: { type: 'string', description: 'Commit date (ISO 8601).' },
+                url: { type: 'string', description: 'Link to the commit.' },
+                repository: { type: 'string', description: 'Repository name.' },
+                repositoryUrl: { type: 'string', description: 'Repository URL.' },
+                issueKey: { type: 'string', description: 'The Jira issue this commit is linked to.' },
+              },
+              required: ['id', 'message', 'author', 'date', 'repository', 'issueKey'],
+            },
+          },
+        },
+        required: ['projectKey', 'version', 'issueCount', 'commits'],
+      },
+    },
   ];
 
   const filteredTools = allowedTools && !allowedTools.includes('*')
@@ -1048,6 +1098,84 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify(result, null, 2),
             },
           ],
+          structuredContent: result,
+        };
+      }
+
+      case 'jira_get_version_commits': {
+        const { projectKey, version, maxIssues = 100 } = args;
+
+        // Step 1: Find all issues in the project with the given fixVersion
+        let jql = `project = "${projectKey}" AND fixVersion = "${version}" ORDER BY key ASC`;
+        jql = enforceJqlSecurity(jql);
+        const searchRes = await jiraClient.get('/rest/api/2/search', {
+          params: { jql, maxResults: maxIssues, fields: 'id,key,summary' },
+        });
+        const issues = searchRes.data.issues || [];
+
+        const commits = [];
+        const seenCommitIds = new Set();
+
+        // Step 2: For each issue, fetch linked commits via dev-status API
+        for (const issue of issues) {
+          const issueId = issue.id;
+          const issueKey = issue.key;
+
+          try {
+            const summaryRes = await jiraClient.get(
+              `/rest/dev-status/latest/issue/summary?issueId=${encodeURIComponent(issueId)}`
+            );
+            const summary = summaryRes.data?.summary;
+
+            if (summary?.repository?.byInstanceType) {
+              const instanceTypes = Object.keys(summary.repository.byInstanceType);
+
+              for (const applicationType of instanceTypes) {
+                try {
+                  const detailRes = await jiraClient.get(
+                    `/rest/dev-status/latest/issue/detail?issueId=${encodeURIComponent(issueId)}&applicationType=${encodeURIComponent(applicationType)}&dataType=repository`
+                  );
+                  const repositories = detailRes.data?.detail?.[0]?.repositories || [];
+
+                  for (const repo of repositories) {
+                    const repoName = repo.name || 'Unknown repository';
+                    const repoUrl = repo.url || '';
+                    for (const commit of (repo.commits || [])) {
+                      const commitId = commit.id || commit.displayId || '';
+                      // Deduplicate commits that appear on multiple issues
+                      if (commitId && seenCommitIds.has(commitId)) continue;
+                      if (commitId) seenCommitIds.add(commitId);
+                      commits.push({
+                        id: commitId,
+                        message: commit.message || '',
+                        author: commit.author?.name || '',
+                        authorEmail: commit.author?.email || '',
+                        date: commit.authorTimestamp || commit.committedDate || '',
+                        url: commit.url || '',
+                        repository: repoName,
+                        repositoryUrl: repoUrl,
+                        issueKey,
+                      });
+                    }
+                  }
+                } catch (detailErr) {
+                  console.error(`[jira_get_version_commits] detail error for ${issueKey}/${applicationType}:`, detailErr.message);
+                }
+              }
+            }
+          } catch (summaryErr) {
+            console.error(`[jira_get_version_commits] summary error for ${issueKey}:`, summaryErr.message);
+          }
+        }
+
+        const result = {
+          projectKey,
+          version,
+          issueCount: issues.length,
+          commits,
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           structuredContent: result,
         };
       }

@@ -52,6 +52,7 @@ describe('Jira MCP Server Tests', () => {
       expect(toolNames).toContain('jira_get_watched_issues');
       expect(toolNames).toContain('jira_get_user_activities');
       expect(toolNames).toContain('jira_get_issue_commits');
+      expect(toolNames).toContain('jira_get_version_commits');
     });
   });
 
@@ -172,6 +173,70 @@ describe('Jira MCP Server Tests', () => {
       expect(data.commits[0].message).toBe('Fix login bug');
       expect(data.commits[0].author).toBe('Jane Doe');
       expect(data.commits[0].repository).toBe('my-repo');
+    });
+
+    it('should handle jira_get_version_commits and aggregate commits from all issues', async () => {
+      const getSpy = vi.spyOn(jiraClient, 'get').mockImplementation((url, config) => {
+        // JQL search for issues in the version
+        if (url === '/rest/api/2/search') {
+          return Promise.resolve({
+            data: {
+              issues: [
+                { id: '10001', key: 'PROJ-100', fields: { summary: 'Issue A' } },
+                { id: '10002', key: 'PROJ-101', fields: { summary: 'Issue B' } },
+              ],
+            },
+          });
+        }
+        // Dev-status summary — both issues have fecru repos
+        if (url.includes('/rest/dev-status/latest/issue/summary')) {
+          return Promise.resolve({
+            data: {
+              summary: {
+                repository: { byInstanceType: { fecru: { count: 1 } } },
+              },
+            },
+          });
+        }
+        // Dev-status detail — each issue returns one unique commit
+        if (url.includes('/rest/dev-status/latest/issue/detail')) {
+          const issueId = new URL('http://x' + url).searchParams.get('issueId');
+          return Promise.resolve({
+            data: {
+              detail: [{
+                repositories: [{
+                  name: 'my-repo',
+                  url: 'https://scm.example.com/my-repo',
+                  commits: [{
+                    id: `commit-${issueId}`,
+                    message: `Fix for issue ${issueId}`,
+                    author: { name: 'Dev User', email: 'dev@example.com' },
+                    authorTimestamp: '2026-06-01T10:00:00.000+0000',
+                    url: `https://scm.example.com/commits/commit-${issueId}`,
+                  }],
+                }],
+              }],
+            },
+          });
+        }
+        return Promise.reject(new Error('Unexpected URL: ' + url));
+      });
+
+      const result = await client.callTool({
+        name: 'jira_get_version_commits',
+        arguments: { projectKey: 'PROJ', version: 'v1.0.0' },
+      });
+
+      expect(result.isError).toBeUndefined();
+      const data = JSON.parse(result.content[0].text);
+      expect(data.projectKey).toBe('PROJ');
+      expect(data.version).toBe('v1.0.0');
+      expect(data.issueCount).toBe(2);
+      expect(data.commits).toHaveLength(2);
+      // Each commit should carry its originating issueKey
+      const issueKeys = data.commits.map(c => c.issueKey);
+      expect(issueKeys).toContain('PROJ-100');
+      expect(issueKeys).toContain('PROJ-101');
     });
   });
 
