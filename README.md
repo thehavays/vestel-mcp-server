@@ -8,6 +8,8 @@ An integration server built on the [Model Context Protocol (MCP)](https://modelc
 - **Fetch Issue Details**: Retrieve key fields, descriptions, and comments.
 - **Query Issues via JQL**: Perform flexible Jira Query Language searches.
 - **Manage Issues**: Create new issues, update fields, and add comments.
+- **Get Issue Commits**: Fetch commits linked to a single issue via the Jira Development Status API (supports Bitbucket, FishEye/Crucible, GitHub, GitLab integrations).
+- **Get Version Commits**: Aggregate all commits across every issue belonging to a specific project release version (fixVersion).
 - **Strict Schema Compliance**: All tools declare input and output schemas conforming to the MCP specifications.
 
 ---
@@ -150,6 +152,69 @@ Fetch a timeline feed of recent activities (comments, transitions, updates) perf
   - `endDate` (string, optional): End date in `YYYY-MM-DD` format.
   - `maxResults` (number, optional): Defaults to `50`.
 * **Output Schema**: `{ activities: Array<{ title, published, content, url }> }`
+
+### `jira_get_issue_commits`
+Fetch commits linked to a specific Jira issue via the Jira Development Status API (`/rest/dev-status/latest/issue/*`). Supports any SCM integration configured in your Jira instance, including Bitbucket, FishEye/Crucible, GitHub, and GitLab.
+
+> [!NOTE]
+> Requires Jira Software with an active source control integration (e.g., Bitbucket Server, FishEye/Crucible, GitHub for Jira). The tool automatically discovers all linked SCM instance types and fetches commits from each.
+
+* **Input Schema**:
+  - `issueKey` (string, required): The issue key (e.g., `PROJ-123`).
+* **Output Schema**: `{ issueKey, commits: Array<{ id, message, author, authorEmail, date, url, repository, repositoryUrl }> }`
+* **Example Output**:
+  ```json
+  {
+    "issueKey": "PROJ-123",
+    "commits": [
+      {
+        "id": "abc1234",
+        "message": "BUGFIX PROJ-123: Fix login bug",
+        "author": "Jane Doe",
+        "authorEmail": "jane@example.com",
+        "date": "2026-05-22T17:38:17.589+0300",
+        "url": "https://your-scm.example.com/commits/abc1234",
+        "repository": "my-repo",
+        "repositoryUrl": "https://your-scm.example.com/browse/my-repo"
+      }
+    ]
+  }
+  ```
+
+---
+
+### `jira_get_version_commits`
+Aggregate all commits linked to a specific Jira project **release version** (`fixVersion`). Uses JQL to find every issue belonging to the version, then calls the Jira Development Status API per issue and deduplicates commits that appear on multiple issues. Each commit in the result carries its originating `issueKey`.
+
+> [!NOTE]
+> Requires Jira Software with an active source control integration (e.g., Bitbucket Server, FishEye/Crucible, GitHub for Jira). Large versions with many issues will trigger one dev-status API call per issue; use `maxIssues` to cap the scan if needed.
+
+* **Input Schema**:
+  - `projectKey` (string, required): The project key (e.g., `COMA`).
+  - `version` (string, required): The fixVersion name exactly as it appears in Jira (e.g., `v1.18.9`).
+  - `maxIssues` (number, optional): Maximum number of issues to scan. Defaults to `100`.
+* **Output Schema**: `{ projectKey, version, issueCount, commits: Array<{ id, message, author, authorEmail, date, url, repository, repositoryUrl, issueKey }> }`
+* **Example Output**:
+  ```json
+  {
+    "projectKey": "COMA",
+    "version": "v1.18.9",
+    "issueCount": 42,
+    "commits": [
+      {
+        "id": "8470",
+        "message": "BUGFIX COMA-4991: Fix eFuse version reporting",
+        "author": "Eray Havaylar",
+        "authorEmail": "",
+        "date": "2026-05-22T17:38:17.589+0300",
+        "url": "https://rdreview.vestel.com.tr/changelog/AndroidTV?cs=8470",
+        "repository": "AndroidTV",
+        "repositoryUrl": "https://rdreview.vestel.com.tr/browse/AndroidTV",
+        "issueKey": "COMA-4991"
+      }
+    ]
+  }
+  ```
 
 ---
 

@@ -1,0 +1,15 @@
+{
+  "issues": [
+    {
+      "key": "PROJ-123",
+      "fields": {
+        "summary": "Example Issue Summary",
+        "status": { "name": "In Progress" },
+        "updated": "2026-06-27T10:00:00.000+0000",
+        "issuetype": { "name": "Bug" },
+        "priority": { "name": "High" },
+        "issuelinks": []
+      }
+    }
+  ]
+}
