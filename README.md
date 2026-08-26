@@ -144,6 +144,13 @@ Retrieve a list of open/active issues watched by a specific user or the authenti
   - `maxResults` (number, optional): Defaults to `50`.
 * **Output Schema**: `{ issues: Array<{ key, summary, status, updated, issueType, priority, linkedIssues: Array<{ direction, linkType, key, summary, status, issueType, priority }> }> }`
 
+### `jira_download_attachments`
+Download all attachments for a specific Jira issue to a local directory.
+* **Input Schema**:
+  - `issueKey` (string, required): The issue key (e.g., `PROJ-123`).
+  - `downloadPath` (string, optional): The directory where files will be saved. Defaults to the current working directory.
+* **Output Schema**: `{ issueKey, downloadedFiles: Array<string>, failedFiles: Array<string> }`
+
 ### `jira_get_user_activities`
 Fetch a timeline feed of recent activities (comments, transitions, updates) performed by a user using the Jira Activity Stream.
 * **Input Schema**:
