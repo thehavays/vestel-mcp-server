@@ -242,16 +242,7 @@ describe('Jira MCP Server Tests', () => {
     it('should handle jira_download_attachments and download files', async () => {
       const getSpy = vi.spyOn(jiraClient, 'get').mockImplementation((url) => {
         if (url.includes('/rest/api/2/issue/')) {
-          return Promise.resolve({
-            data: {
-              key: 'PROJ-123',
-              fields: {
-                attachment: [
-                  { filename: 'test.txt', content: 'https://example.com/test.txt' }
-                ]
-              }
-            }
-          });
+          return Promise.resolve({ data: issueMock });
         }
         if (url === 'https://example.com/test.txt') {
           const fakeStream = {
