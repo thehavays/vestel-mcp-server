@@ -53,6 +53,7 @@ describe('Jira MCP Server Tests', () => {
       expect(toolNames).toContain('jira_get_user_activities');
       expect(toolNames).toContain('jira_get_issue_commits');
       expect(toolNames).toContain('jira_get_version_commits');
+      expect(toolNames).toContain('jira_download_attachments');
     });
   });
 
@@ -237,6 +238,46 @@ describe('Jira MCP Server Tests', () => {
       const issueKeys = data.commits.map(c => c.issueKey);
       expect(issueKeys).toContain('PROJ-100');
       expect(issueKeys).toContain('PROJ-101');
+    });
+    it('should handle jira_download_attachments and download files', async () => {
+      const getSpy = vi.spyOn(jiraClient, 'get').mockImplementation((url) => {
+        if (url.includes('/rest/api/2/issue/')) {
+          return Promise.resolve({ data: issueMock });
+        }
+        if (url === 'https://example.com/test.txt') {
+          const fakeStream = {
+            pipe: vi.fn(),
+          };
+          return Promise.resolve({ data: fakeStream });
+        }
+        return Promise.reject(new Error('Unexpected URL: ' + url));
+      });
+
+      const existsSpy = vi.spyOn(fs, 'existsSync').mockReturnValue(true);
+      const mkdirSpy = vi.spyOn(fs, 'mkdirSync').mockImplementation(() => {});
+      const writeStreamMock = {
+        on: vi.fn((event, callback) => {
+          if (event === 'finish') {
+            callback(); // Simulate immediate finish
+          }
+        }),
+      };
+      const createWriteStreamSpy = vi.spyOn(fs, 'createWriteStream').mockReturnValue(writeStreamMock);
+
+      const result = await client.callTool({
+        name: 'jira_download_attachments',
+        arguments: { issueKey: 'PROJ-123', downloadPath: '/fake/path' }
+      });
+
+      expect(result.isError).toBeUndefined();
+      const data = JSON.parse(result.content[0].text);
+      expect(data.issueKey).toBe('PROJ-123');
+      expect(data.downloadedFiles).toHaveLength(1);
+      expect(data.downloadedFiles[0]).toContain('test.txt');
+
+      expect(getSpy).toHaveBeenCalledWith('/rest/api/2/issue/PROJ-123');
+      expect(getSpy).toHaveBeenCalledWith('https://example.com/test.txt', { responseType: 'stream' });
+      expect(createWriteStreamSpy).toHaveBeenCalled();
     });
   });
 

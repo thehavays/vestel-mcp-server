@@ -184,7 +184,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'jira_get_issues_by_assignee',
-      description: 'Get list of open/active issues assigned to a specific username (checks for Pending, Submitted, In Progress, Open, and Reopened statuses). Output includes issue type, priority, and linked issues.',
+      description: 'Get list of open/active issues assigned to a specific username (checks for Pending, Submitted, In Progress, Open, and Reopened statuses). ALWAYS prefer this tool over jira_search_issues when you need to find issues assigned to a specific user.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -381,7 +381,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'jira_search_issues',
-      description: 'Search Jira issues using JQL (Jira Query Language). Output includes issue type, priority, and linked issues.',
+      description: 'Search Jira issues using JQL (Jira Query Language). Do NOT use this tool if you only need to get issues assigned to a specific user or watched by a user; use the specific tools (jira_get_issues_by_assignee, jira_get_watched_issues) instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -619,6 +619,41 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
         required: ['projectKey', 'version', 'issueCount', 'commits'],
+      },
+    },
+    {
+      name: 'jira_download_attachments',
+      description: 'Download all attachments for a specific Jira issue to a local directory.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: {
+            type: 'string',
+            description: 'The issue key (e.g., PROJ-123).',
+          },
+          downloadPath: {
+            type: 'string',
+            description: 'The absolute or relative directory path where files will be saved. Defaults to the current working directory.',
+          },
+        },
+        required: ['issueKey'],
+      },
+      outputSchema: {
+        type: 'object',
+        properties: {
+          issueKey: { type: 'string' },
+          downloadedFiles: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of successfully downloaded file paths.',
+          },
+          failedFiles: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of filenames that failed to download.',
+          },
+        },
+        required: ['issueKey', 'downloadedFiles', 'failedFiles'],
       },
     },
   ];
@@ -1174,6 +1209,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           issueCount: issues.length,
           commits,
         };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          structuredContent: result,
+        };
+      }
+
+      case 'jira_download_attachments': {
+        const { issueKey, downloadPath = process.cwd() } = args;
+
+        const response = await jiraClient.get(`/rest/api/2/issue/${encodeURIComponent(issueKey)}`);
+        const issue = response.data;
+        
+        const attachments = issue.fields.attachment || [];
+        if (attachments.length === 0) {
+          return {
+            content: [{ type: 'text', text: `No attachments found for issue ${issueKey}.` }],
+            structuredContent: { issueKey, downloadedFiles: [], failedFiles: [] },
+          };
+        }
+
+        const absoluteDownloadPath = path.join(path.resolve(downloadPath), issueKey);
+        if (!fs.existsSync(absoluteDownloadPath)) {
+          fs.mkdirSync(absoluteDownloadPath, { recursive: true });
+        }
+
+        const downloadedFiles = [];
+        const failedFiles = [];
+
+        for (const attachment of attachments) {
+          try {
+            const fileUrl = attachment.content;
+            const filePath = path.join(absoluteDownloadPath, attachment.filename);
+            
+            const fileRes = await jiraClient.get(fileUrl, {
+              responseType: 'stream',
+            });
+
+            const writer = fs.createWriteStream(filePath);
+            fileRes.data.pipe(writer);
+
+            await new Promise((resolve, reject) => {
+              writer.on('finish', resolve);
+              writer.on('error', reject);
+            });
+
+            downloadedFiles.push(filePath);
+          } catch (err) {
+            console.error(`Failed to download attachment ${attachment.filename}:`, err.message);
+            failedFiles.push(attachment.filename);
+          }
+        }
+
+        const result = {
+          issueKey,
+          downloadedFiles,
+          failedFiles,
+        };
+
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           structuredContent: result,

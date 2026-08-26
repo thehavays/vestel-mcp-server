@@ -30,7 +30,7 @@ The server is configured via environment variables or a configuration file.
 
 | Variable | Description | Example |
 | :--- | :--- | :--- |
-| `JIRA_URL` | Base URL of your Jira instance | `https://rdpm.vestel.com.tr/` |
+| `JIRA_URL` | Base URL of your Jira instance | `https://jira.example.com/` |
 | `JIRA_USERNAME` | Username (required for `basic` authentication) | `your_username` |
 | `JIRA_PASSWORD` | Personal Access Token (PAT) or password | `your_pat_or_password` |
 | `JIRA_AUTH_TYPE` | Authentication mechanism: `bearer` or `basic` (default) | `bearer` |
@@ -70,7 +70,7 @@ Configure your MCP host (such as Claude Desktop or Gemini Code Assist) to launch
       "command": "npx",
       "args": ["-y", "github:thehavays/vestel-mcp-server"],
       "env": {
-        "JIRA_URL": "https://rdpm.vestel.com.tr/",
+        "JIRA_URL": "https://jira.example.com/",
         "JIRA_USERNAME": "your_username",
         "JIRA_PASSWORD": "your_secure_password_or_token",
         "JIRA_AUTH_TYPE": "bearer",
@@ -144,6 +144,13 @@ Retrieve a list of open/active issues watched by a specific user or the authenti
   - `maxResults` (number, optional): Defaults to `50`.
 * **Output Schema**: `{ issues: Array<{ key, summary, status, updated, issueType, priority, linkedIssues: Array<{ direction, linkType, key, summary, status, issueType, priority }> }> }`
 
+### `jira_download_attachments`
+Download all attachments for a specific Jira issue to a local directory.
+* **Input Schema**:
+  - `issueKey` (string, required): The issue key (e.g., `PROJ-123`).
+  - `downloadPath` (string, optional): The directory where files will be saved. Defaults to the current working directory.
+* **Output Schema**: `{ issueKey, downloadedFiles: Array<string>, failedFiles: Array<string> }`
+
 ### `jira_get_user_activities`
 Fetch a timeline feed of recent activities (comments, transitions, updates) performed by a user using the Jira Activity Stream.
 * **Input Schema**:
@@ -190,27 +197,27 @@ Aggregate all commits linked to a specific Jira project **release version** (`fi
 > Requires Jira Software with an active source control integration (e.g., Bitbucket Server, FishEye/Crucible, GitHub for Jira). Large versions with many issues will trigger one dev-status API call per issue; use `maxIssues` to cap the scan if needed.
 
 * **Input Schema**:
-  - `projectKey` (string, required): The project key (e.g., `COMA`).
+  - `projectKey` (string, required): The project key (e.g., `PROJ`).
   - `version` (string, required): The fixVersion name exactly as it appears in Jira (e.g., `v1.18.9`).
   - `maxIssues` (number, optional): Maximum number of issues to scan. Defaults to `100`.
 * **Output Schema**: `{ projectKey, version, issueCount, commits: Array<{ id, message, author, authorEmail, date, url, repository, repositoryUrl, issueKey }> }`
 * **Example Output**:
   ```json
   {
-    "projectKey": "COMA",
+    "projectKey": "PROJ",
     "version": "v1.18.9",
     "issueCount": 42,
     "commits": [
       {
         "id": "8470",
-        "message": "BUGFIX COMA-4991: Fix eFuse version reporting",
-        "author": "Eray Havaylar",
+        "message": "BUGFIX PROJ-4991: Fix example bug",
+        "author": "John Doe",
         "authorEmail": "",
         "date": "2026-05-22T17:38:17.589+0300",
-        "url": "https://rdreview.vestel.com.tr/changelog/AndroidTV?cs=8470",
-        "repository": "AndroidTV",
-        "repositoryUrl": "https://rdreview.vestel.com.tr/browse/AndroidTV",
-        "issueKey": "COMA-4991"
+        "url": "https://your-scm.example.com/changelog/my-repo?cs=8470",
+        "repository": "my-repo",
+        "repositoryUrl": "https://your-scm.example.com/browse/my-repo",
+        "issueKey": "PROJ-4991"
       }
     ]
   }
