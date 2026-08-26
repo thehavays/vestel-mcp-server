@@ -1242,9 +1242,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const fileUrl = attachment.content;
             const filePath = path.join(absoluteDownloadPath, attachment.filename);
             
-            const fileRes = await jiraClient({
-              method: 'GET',
-              url: fileUrl,
+            const fileRes = await jiraClient.get(fileUrl, {
               responseType: 'stream',
             });
 
