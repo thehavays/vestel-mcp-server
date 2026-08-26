@@ -184,7 +184,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'jira_get_issues_by_assignee',
-      description: 'Get list of open/active issues assigned to a specific username (checks for Pending, Submitted, In Progress, Open, and Reopened statuses). Output includes issue type, priority, and linked issues.',
+      description: 'Get list of open/active issues assigned to a specific username (checks for Pending, Submitted, In Progress, Open, and Reopened statuses). ALWAYS prefer this tool over jira_search_issues when you need to find issues assigned to a specific user.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -381,7 +381,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'jira_search_issues',
-      description: 'Search Jira issues using JQL (Jira Query Language). Output includes issue type, priority, and linked issues.',
+      description: 'Search Jira issues using JQL (Jira Query Language). Do NOT use this tool if you only need to get issues assigned to a specific user or watched by a user; use the specific tools (jira_get_issues_by_assignee, jira_get_watched_issues) instead.',
       inputSchema: {
         type: 'object',
         properties: {
