@@ -53,6 +53,7 @@ describe('Jira MCP Server Tests', () => {
       expect(toolNames).toContain('jira_get_user_activities');
       expect(toolNames).toContain('jira_get_issue_commits');
       expect(toolNames).toContain('jira_get_version_commits');
+      expect(toolNames).toContain('jira_download_attachments');
     });
   });
 
